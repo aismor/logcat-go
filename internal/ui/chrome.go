@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	headerHeight = 56
-	headerIcon   = 36
+	headerHeight = 62
+	headerIcon   = 44
 	pillRadius   = 10
 	pillPadX     = 10
 	pillPadY     = 4

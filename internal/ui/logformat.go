@@ -8,7 +8,6 @@ import (
 )
 
 const (
-	displayWrapWidth    = 100
 	maxDisplayBlocks    = 350
 	maxDisplayTextRunes = 128 * 1024
 )
@@ -63,48 +62,8 @@ func linePrefix(entry model.LogEntry) string {
 	return b.String()
 }
 
-func wrapRunes(text string, width int) []string {
-	if width <= 0 || text == "" {
-		return []string{text}
-	}
-	runes := []rune(text)
-	if len(runes) <= width {
-		return []string{text}
-	}
-	chunks := make([]string, 0, len(runes)/width+1)
-	for i := 0; i < len(runes); i += width {
-		end := i + width
-		if end > len(runes) {
-			end = len(runes)
-		}
-		chunks = append(chunks, string(runes[i:end]))
-	}
-	return chunks
-}
-
-// formatDisplayBlock quebra mensagens longas (JSON/API) em várias linhas visíveis.
 func formatDisplayBlock(entry model.LogEntry) string {
-	prefix := strings.TrimSpace(linePrefix(entry))
-	msg := messageText(entry)
-
-	if msg == "" {
-		return prefix
-	}
-
-	head := prefix + " "
-	indent := strings.Repeat(" ", len([]rune(head)))
-	chunks := wrapRunes(msg, displayWrapWidth)
-
-	var b strings.Builder
-	b.Grow(len(head) + len(msg) + len(chunks))
-	b.WriteString(head)
-	b.WriteString(chunks[0])
-	for i := 1; i < len(chunks); i++ {
-		b.WriteByte('\n')
-		b.WriteString(indent)
-		b.WriteString(chunks[i])
-	}
-	return b.String()
+	return formatPlainLine(entry)
 }
 
 func formatPlainLine(entry model.LogEntry) string {

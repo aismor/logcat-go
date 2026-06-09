@@ -6,7 +6,8 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/widget"
 
 	"github.com/aismor/logcat-go/internal/adb"
 	"github.com/aismor/logcat-go/internal/model"
@@ -15,8 +16,8 @@ import (
 const uiRefreshDelay = 250 * time.Millisecond
 
 type LogView struct {
+	root            *logViewRoot
 	entry           *LogEntry
-	scroll          *container.Scroll
 	store           *adb.LogStore
 	parent          fyne.Window
 	formattedBlocks []string
@@ -39,7 +40,7 @@ func NewLogView(store *adb.LogStore, parent fyne.Window) *LogView {
 	view.entry = NewLogEntry(func(raw string) {
 		ShowJSONViewer(parent, raw)
 	})
-	view.entry.Wrapping = fyne.TextWrapOff
+	view.entry.Wrapping = fyne.TextWrapBreak
 	view.entry.Scroll = fyne.ScrollNone
 	view.entry.TextStyle = fyne.TextStyle{Monospace: true}
 	view.entry.SetPlaceHolder("Logcat — clique em Iniciar para capturar logs ao vivo")
@@ -52,14 +53,61 @@ func NewLogView(store *adb.LogStore, parent fyne.Window) *LogView {
 		view.updating = false
 	}
 
-	view.scroll = container.NewVScroll(view.entry)
-	view.scroll.SetMinSize(fyne.NewSize(0, 200))
+	view.root = newLogViewRoot(view, view.entry)
 	return view
 }
 
 func (v *LogView) Container() fyne.CanvasObject {
-	return v.scroll
+	return v.root
 }
+
+type logViewRoot struct {
+	widget.BaseWidget
+	view  *LogView
+	entry *LogEntry
+	lastW float32
+}
+
+func newLogViewRoot(view *LogView, entry *LogEntry) *logViewRoot {
+	r := &logViewRoot{view: view, entry: entry}
+	r.ExtendBaseWidget(r)
+	return r
+}
+
+func (r *logViewRoot) CreateRenderer() fyne.WidgetRenderer {
+	return &logViewRootRenderer{root: r}
+}
+
+type logViewRootRenderer struct {
+	root *logViewRoot
+}
+
+func (r *logViewRootRenderer) Layout(size fyne.Size) {
+	r.root.entry.Resize(size)
+	r.root.entry.Move(fyne.NewPos(0, 0))
+	if size.Width != r.root.lastW {
+		r.root.lastW = size.Width
+		r.root.entry.Refresh()
+		if r.root.view.autoFollow {
+			r.root.view.scrollToEnd()
+		}
+	}
+}
+
+func (r *logViewRootRenderer) MinSize() fyne.Size {
+	return fyne.NewSize(0, 200)
+}
+
+func (r *logViewRootRenderer) Refresh() {
+	r.root.entry.Refresh()
+	canvas.Refresh(r.root)
+}
+
+func (r *logViewRootRenderer) Objects() []fyne.CanvasObject {
+	return []fyne.CanvasObject{r.root.entry}
+}
+
+func (r *logViewRootRenderer) Destroy() {}
 
 func (v *LogView) SetAutoFollow(enabled bool) {
 	v.autoFollow = enabled
@@ -151,23 +199,18 @@ func (v *LogView) scrollToEnd() {
 
 func (v *LogView) scrollToEndDeferred() {
 	scroll := func() {
-		if v.scroll == nil {
+		if v.entry == nil {
 			return
 		}
 		v.entry.Refresh()
-		contentHeight := v.entry.MinSize().Height
-		viewHeight := v.scroll.Size().Height
-		maxY := contentHeight - viewHeight
-		if maxY < 0 {
-			maxY = 0
-		}
-		v.scroll.ScrollToOffset(fyne.NewPos(0, maxY))
+		v.entry.ScrollToEnd()
 	}
 
 	fyne.Do(scroll)
 	time.AfterFunc(20*time.Millisecond, func() { fyne.Do(scroll) })
 	time.AfterFunc(80*time.Millisecond, func() { fyne.Do(scroll) })
 	time.AfterFunc(200*time.Millisecond, func() { fyne.Do(scroll) })
+	time.AfterFunc(400*time.Millisecond, func() { fyne.Do(scroll) })
 }
 
 func (v *LogView) Clear() {

@@ -17,6 +17,20 @@ func NewLogEntry(onFormatJSON func(string)) *LogEntry {
 	return e
 }
 
+func (e *LogEntry) MinSize() fyne.Size {
+	size := e.Entry.MinSize()
+	size.Width = 1
+	return size
+}
+
+func (e *LogEntry) ScrollToEnd() {
+	if e.Text == "" {
+		return
+	}
+	e.TypedKey(&fyne.KeyEvent{Name: fyne.KeyPageDown})
+	e.Refresh()
+}
+
 func (e *LogEntry) TappedSecondary(pe *fyne.PointEvent) {
 	if e.Disabled() && e.Password {
 		return
