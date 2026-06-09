@@ -192,7 +192,7 @@ func (a *App) buildLayout() fyne.CanvasObject {
 	})
 	fullscreenBtn.Importance = widget.LowImportance
 
-	logHeading := cardHeading("Logs", "Selecione texto para copiar ou formatar JSON",
+	logHeading := cardHeading("Logs", "Clique em uma linha e use { } JSON · cores por nível",
 		container.NewHBox(clearLogsBtn, fullscreenBtn))
 	logPanel := container.NewBorder(logHeading, nil, nil, nil, a.logView.Container())
 	logCard := widget.NewCard("", "", logPanel)
@@ -501,7 +501,7 @@ func (a *App) consumeLogcat(session *adb.LogcatSession) {
 		})
 	}
 
-	ticker := time.NewTicker(400 * time.Millisecond)
+	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
 	entries := session.Entries()

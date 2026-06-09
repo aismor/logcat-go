@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
+
+	"github.com/aismor/logcat-go/internal/model"
 )
 
 func looksLikeJSON(text string) bool {
@@ -25,42 +27,63 @@ func extractJSON(text string) (string, bool) {
 		return normalized, true
 	}
 
-	startObj := strings.Index(text, "{")
-	startArr := strings.Index(text, "[")
-	start := -1
-	switch {
-	case startObj >= 0 && startArr >= 0:
-		if startObj < startArr {
-			start = startObj
-		} else {
-			start = startArr
+	for i, r := range text {
+		switch r {
+		case '{':
+			if candidate, ok := extractBalancedJSON(text[i:], '{', '}'); ok {
+				return candidate, true
+			}
+		case '[':
+			if candidate, ok := extractBalancedJSON(text[i:], '[', ']'); ok {
+				return candidate, true
+			}
 		}
-	case startObj >= 0:
-		start = startObj
-	case startArr >= 0:
-		start = startArr
 	}
-	if start < 0 {
+	return "", false
+}
+
+func extractBalancedJSON(s string, open, close rune) (string, bool) {
+	if s == "" {
 		return "", false
 	}
 
-	endObj := strings.LastIndex(text, "}")
-	endArr := strings.LastIndex(text, "]")
-	end := endObj
-	if endArr > end {
-		end = endArr
-	}
-	if end <= start {
-		return "", false
-	}
+	depth := 0
+	inString := false
+	escape := false
 
-	candidate := text[start : end+1]
-	if json.Valid([]byte(candidate)) {
-		return candidate, true
-	}
-
-	if normalized, ok := normalizeJSONSelection(candidate); ok {
-		return normalized, true
+	for i, r := range s {
+		if escape {
+			escape = false
+			continue
+		}
+		if r == '\\' && inString {
+			escape = true
+			continue
+		}
+		if r == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		if r == open {
+			depth++
+			continue
+		}
+		if r == close {
+			depth--
+			if depth == 0 {
+				candidate := s[:i+1]
+				if json.Valid([]byte(candidate)) {
+					return candidate, true
+				}
+				if normalized, ok := normalizeJSONSelection(candidate); ok {
+					return normalized, true
+				}
+				return "", false
+			}
+		}
 	}
 	return "", false
 }
@@ -90,6 +113,56 @@ func normalizeJSONSelection(text string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func resolveJSONFromEntries(entries []model.LogEntry, index int) (string, bool) {
+	if index < 0 || index >= len(entries) {
+		return "", false
+	}
+
+	sources := []string{
+		mergeContinuationMessages(entries, index),
+		messageText(entries[index]),
+		formatPlainLine(entries[index]),
+		entries[index].Raw,
+	}
+	for _, text := range sources {
+		if jsonText, ok := extractJSON(text); ok {
+			return jsonText, true
+		}
+	}
+	return "", false
+}
+
+func mergeContinuationMessages(entries []model.LogEntry, start int) string {
+	if start < 0 || start >= len(entries) {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(messageText(entries[start]))
+	if _, ok := extractJSON(b.String()); ok {
+		return b.String()
+	}
+
+	for i := start + 1; i < len(entries) && i-start <= 32; i++ {
+		if !sameLogContext(entries[start], entries[i]) {
+			break
+		}
+		b.WriteString(messageText(entries[i]))
+		if _, ok := extractJSON(b.String()); ok {
+			return b.String()
+		}
+	}
+	return b.String()
+}
+
+func sameLogContext(a, b model.LogEntry) bool {
+	return a.PID == b.PID &&
+		a.TID == b.TID &&
+		a.Tag == b.Tag &&
+		a.Date == b.Date &&
+		a.Time == b.Time
 }
 
 func formatJSON(raw string) (string, error) {

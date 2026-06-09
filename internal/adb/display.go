@@ -17,7 +17,7 @@ func NewLogAssembler() *LogAssembler {
 	return &LogAssembler{}
 }
 
-// Push emite uma linha por registro logcat (sem mesclar JSON/respostas longas).
+// Push emite uma linha por registro logcat. Linhas de continuação são anexadas ao registro anterior.
 func (a *LogAssembler) Push(line string) (model.LogEntry, bool, bool) {
 	entry, ok := ParseLogLine(line)
 	if !ok {
@@ -28,6 +28,17 @@ func (a *LogAssembler) Push(line string) (model.LogEntry, bool, bool) {
 	entry.Raw = sanitizeLogText(entry.Raw)
 
 	if isContinuation(entry) {
+		if a.last != nil {
+			merged := *a.last
+			chunk := continuationText(entry)
+			merged.Message = sanitizeLogText(merged.Message + chunk)
+			merged.Raw = sanitizeLogText(merged.Raw + chunk)
+			a.last = &merged
+			if !IsDisplayable(merged) {
+				return model.LogEntry{}, false, false
+			}
+			return merged, true, true
+		}
 		entry = a.inheritContinuation(entry)
 	} else {
 		entry.Level = normalizeLevel(entry.Level)
@@ -38,6 +49,14 @@ func (a *LogAssembler) Push(line string) (model.LogEntry, bool, bool) {
 		return model.LogEntry{}, false, false
 	}
 	return entry, true, false
+}
+
+func continuationText(entry model.LogEntry) string {
+	text := strings.TrimSpace(entry.Raw)
+	if text == "" {
+		text = strings.TrimSpace(entry.Message)
+	}
+	return sanitizeLogText(text)
 }
 
 func (a *LogAssembler) inheritContinuation(entry model.LogEntry) model.LogEntry {

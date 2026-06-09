@@ -13,47 +13,52 @@ import (
 	"github.com/aismor/logcat-go/internal/model"
 )
 
-const uiRefreshDelay = 250 * time.Millisecond
+const uiRefreshDelay = 200 * time.Millisecond
 
 type LogView struct {
-	root            *logViewRoot
-	entry           *LogEntry
-	store           *adb.LogStore
-	parent          fyne.Window
-	formattedBlocks []string
-	pendingBlocks   []string
-	displayText     string
-	searchQuery     string
-	autoFollow      bool
-	updating        bool
-	refreshPending  bool
-	fullSyncPending bool
+	root             *logListRoot
+	list             *widget.List
+	store            *adb.LogStore
+	parent           fyne.Window
+	displayEntries   []model.LogEntry
+	searchQuery      string
+	autoFollow       bool
+	selectedID       widget.ListItemID
+	contentWidth     float32
+	lastDisplayLen   int
+	refreshPending   bool
+	fullSyncPending  bool
 }
 
 func NewLogView(store *adb.LogStore, parent fyne.Window) *LogView {
 	view := &LogView{
-		store:      store,
-		parent:     parent,
-		autoFollow: true,
+		store:        store,
+		parent:       parent,
+		autoFollow:   true,
+		selectedID:   -1,
+		contentWidth: 640,
 	}
 
-	view.entry = NewLogEntry(func(raw string) {
-		ShowJSONViewer(parent, raw)
-	})
-	view.entry.Wrapping = fyne.TextWrapBreak
-	view.entry.Scroll = fyne.ScrollNone
-	view.entry.TextStyle = fyne.TextStyle{Monospace: true}
-	view.entry.SetPlaceHolder("Logcat — clique em Iniciar para capturar logs ao vivo")
-	view.entry.OnChanged = func(text string) {
-		if view.updating || text == view.displayText {
-			return
-		}
-		view.updating = true
-		view.entry.SetText(view.displayText)
-		view.updating = false
+	view.list = widget.NewList(
+		func() int {
+			return len(view.displayEntries)
+		},
+		func() fyne.CanvasObject {
+			return newLogRowItem()
+		},
+		func(id widget.ListItemID, item fyne.CanvasObject) {
+			if id < 0 || int(id) >= len(view.displayEntries) {
+				return
+			}
+			height := updateLogRowItem(item, view.displayEntries[id], view.rowContentWidth())
+			view.list.SetItemHeight(id, height)
+		},
+	)
+	view.list.OnSelected = func(id widget.ListItemID) {
+		view.selectedID = id
 	}
 
-	view.root = newLogViewRoot(view, view.entry)
+	view.root = newLogListRoot(view, view.list)
 	return view
 }
 
@@ -61,53 +66,77 @@ func (v *LogView) Container() fyne.CanvasObject {
 	return v.root
 }
 
-type logViewRoot struct {
+func (v *LogView) rowContentWidth() float32 {
+	w := v.contentWidth - rowHorizontalPadding*2
+	if w <= 16 {
+		return 640
+	}
+	return w
+}
+
+func (v *LogView) setContentWidth(width float32) {
+	if width <= 0 || width == v.contentWidth {
+		return
+	}
+	v.contentWidth = width
+	v.refreshHeightsFrom(0)
+}
+
+func (v *LogView) refreshHeightsFrom(start int) {
+	if start < 0 {
+		start = 0
+	}
+	w := v.rowContentWidth()
+	for i := start; i < len(v.displayEntries); i++ {
+		height := measureRowHeight(v.displayEntries[i], w)
+		v.list.SetItemHeight(widget.ListItemID(i), height)
+	}
+}
+
+type logListRoot struct {
 	widget.BaseWidget
 	view  *LogView
-	entry *LogEntry
+	list  *widget.List
 	lastW float32
 }
 
-func newLogViewRoot(view *LogView, entry *LogEntry) *logViewRoot {
-	r := &logViewRoot{view: view, entry: entry}
+func newLogListRoot(view *LogView, list *widget.List) *logListRoot {
+	r := &logListRoot{view: view, list: list}
 	r.ExtendBaseWidget(r)
 	return r
 }
 
-func (r *logViewRoot) CreateRenderer() fyne.WidgetRenderer {
-	return &logViewRootRenderer{root: r}
+func (r *logListRoot) CreateRenderer() fyne.WidgetRenderer {
+	return &logListRootRenderer{root: r}
 }
 
-type logViewRootRenderer struct {
-	root *logViewRoot
+type logListRootRenderer struct {
+	root *logListRoot
 }
 
-func (r *logViewRootRenderer) Layout(size fyne.Size) {
-	r.root.entry.Resize(size)
-	r.root.entry.Move(fyne.NewPos(0, 0))
-	if size.Width != r.root.lastW {
+func (r *logListRootRenderer) Layout(size fyne.Size) {
+	r.root.list.Resize(size)
+	r.root.list.Move(fyne.NewPos(0, 0))
+	if size.Width > 0 && size.Width != r.root.lastW {
 		r.root.lastW = size.Width
-		r.root.entry.Refresh()
-		if r.root.view.autoFollow {
-			r.root.view.scrollToEnd()
-		}
+		r.root.view.setContentWidth(size.Width)
 	}
 }
 
-func (r *logViewRootRenderer) MinSize() fyne.Size {
+func (r *logListRootRenderer) MinSize() fyne.Size {
 	return fyne.NewSize(0, 200)
 }
 
-func (r *logViewRootRenderer) Refresh() {
-	r.root.entry.Refresh()
+func (r *logListRootRenderer) Refresh() {
+	r.root.list.Refresh()
 	canvas.Refresh(r.root)
 }
 
-func (r *logViewRootRenderer) Objects() []fyne.CanvasObject {
-	return []fyne.CanvasObject{r.root.entry}
+func (r *logListRootRenderer) Objects() []fyne.CanvasObject {
+	return []fyne.CanvasObject{r.root.list}
 }
 
-func (r *logViewRootRenderer) Destroy() {}
+func (r *logListRootRenderer) Destroy() {}
 
 func (v *LogView) SetAutoFollow(enabled bool) {
 	v.autoFollow = enabled
@@ -122,8 +151,9 @@ func (v *LogView) AutoFollow() bool {
 
 func (v *LogView) SetSearch(query string) {
 	v.searchQuery = strings.TrimSpace(query)
-	v.rebuildDisplayBlocks()
-	v.applyDisplayText(false)
+	v.syncDisplayEntries()
+	v.refreshHeightsFrom(0)
+	v.list.Refresh()
 }
 
 func (v *LogView) SearchQuery() string {
@@ -141,130 +171,88 @@ func (v *LogView) FilteredLen() int {
 	return len(filterEntriesBySearch(v.store.All(), v.searchQuery))
 }
 
-func (v *LogView) rebuildDisplayBlocks() {
+func (v *LogView) syncDisplayEntries() {
 	entries := v.store.All()
 	if v.searchQuery != "" {
 		entries = filterEntriesBySearch(entries, v.searchQuery)
 	}
-
-	blocks := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		blocks = append(blocks, formatDisplayBlock(entry))
+	if len(entries) > maxDisplayBlocks {
+		entries = entries[len(entries)-maxDisplayBlocks:]
 	}
-	v.formattedBlocks = blocks
-	v.displayText = buildDisplayTextFromBlocks(blocks)
-}
-
-func (v *LogView) applyDisplayText(scroll bool) {
-	if v.entry.Text == v.displayText {
-		if scroll && v.autoFollow {
-			v.scrollToEnd()
-		}
-		return
-	}
-
-	v.updating = true
-	v.entry.SetText(v.displayText)
-	v.updating = false
-	v.entry.Refresh()
-
-	if scroll && v.autoFollow {
-		v.scrollToEnd()
-	}
-}
-
-func (v *LogView) appendDisplayChunk(chunk string) {
-	if chunk == "" {
-		return
-	}
-
-	v.displayText += chunk
-	v.updating = true
-	if v.entry.Text == "" {
-		v.entry.SetText(chunk)
-	} else {
-		v.entry.Append(chunk)
-	}
-	v.updating = false
-	v.entry.Refresh()
-
-	if v.autoFollow {
-		v.scrollToEnd()
-	}
+	v.displayEntries = entries
 }
 
 func (v *LogView) scrollToEnd() {
-	v.scrollToEndDeferred()
-}
-
-func (v *LogView) scrollToEndDeferred() {
-	scroll := func() {
-		if v.entry == nil {
-			return
-		}
-		v.entry.Refresh()
-		v.entry.ScrollToEnd()
+	if len(v.displayEntries) == 0 {
+		return
 	}
-
-	fyne.Do(scroll)
-	time.AfterFunc(20*time.Millisecond, func() { fyne.Do(scroll) })
-	time.AfterFunc(80*time.Millisecond, func() { fyne.Do(scroll) })
-	time.AfterFunc(200*time.Millisecond, func() { fyne.Do(scroll) })
-	time.AfterFunc(400*time.Millisecond, func() { fyne.Do(scroll) })
+	fyne.Do(func() {
+		v.list.ScrollToBottom()
+	})
 }
 
 func (v *LogView) Clear() {
 	v.store.Clear()
-	v.formattedBlocks = nil
-	v.pendingBlocks = nil
-	v.displayText = ""
-	v.updating = true
-	v.entry.SetText("")
-	v.updating = false
+	v.displayEntries = nil
+	v.lastDisplayLen = 0
+	v.selectedID = -1
+	v.list.UnselectAll()
+	v.list.Refresh()
 }
 
 func (v *LogView) ApplyBatch(entries []model.LogEntry, _ *model.LogEntry) {
 	before := v.store.Len()
 
 	for _, entry := range entries {
+		if entry.IsUpdate {
+			if !v.store.UpdateLast(entry) {
+				v.store.Append(entry)
+			}
+			continue
+		}
 		v.store.Append(entry)
 	}
 
 	trimmed := len(entries) > 0 && v.store.Len() < before+len(entries)
-
 	if trimmed || v.searchQuery != "" {
-		v.pendingBlocks = nil
 		v.scheduleRefresh(true)
 		return
-	}
-
-	for _, entry := range entries {
-		v.pendingBlocks = append(v.pendingBlocks, formatDisplayBlock(entry))
 	}
 	v.scheduleRefresh(false)
 }
 
+func (v *LogView) selectedEntry() (model.LogEntry, bool) {
+	if v.selectedID < 0 || int(v.selectedID) >= len(v.displayEntries) {
+		return model.LogEntry{}, false
+	}
+	return v.displayEntries[v.selectedID], true
+}
+
 func (v *LogView) SelectedText() string {
-	return v.entry.SelectedText()
+	entry, ok := v.selectedEntry()
+	if !ok {
+		return ""
+	}
+	return formatPlainLine(entry)
 }
 
 func (v *LogView) FormatSelectedJSON() error {
-	selected := strings.TrimSpace(v.entry.SelectedText())
-	if selected == "" {
-		return fmt.Errorf("selecione um trecho com JSON no log")
+	if v.selectedID < 0 || int(v.selectedID) >= len(v.displayEntries) {
+		return fmt.Errorf("clique em uma linha com JSON no log")
 	}
-	jsonText, ok := extractJSON(selected)
+	jsonText, ok := resolveJSONFromEntries(v.displayEntries, int(v.selectedID))
 	if !ok {
-		return fmt.Errorf("seleção não contém JSON válido")
+		return fmt.Errorf("linha selecionada não contém JSON válido")
 	}
 	ShowJSONViewer(v.parent, jsonText)
 	return nil
 }
 
 func (v *LogView) CopySelection(clipboard fyne.Clipboard, onComplete func()) (string, bool) {
-	if selected := v.entry.SelectedText(); selected != "" {
-		clipboard.SetContent(selected)
-		return selected, false
+	if entry, ok := v.selectedEntry(); ok {
+		line := formatPlainLine(entry)
+		clipboard.SetContent(line)
+		return line, false
 	}
 
 	entries := v.store.All()
@@ -293,7 +281,6 @@ func (v *LogView) scheduleRefresh(fullSync bool) {
 	if v.refreshPending {
 		if fullSync {
 			v.fullSyncPending = true
-			v.pendingBlocks = nil
 		}
 		return
 	}
@@ -304,39 +291,22 @@ func (v *LogView) scheduleRefresh(fullSync bool) {
 
 	time.AfterFunc(uiRefreshDelay, func() {
 		fyne.Do(func() {
-			if v.fullSyncPending {
-				v.rebuildDisplayBlocks()
-				v.pendingBlocks = nil
-				v.fullSyncPending = false
-				v.applyDisplayText(v.autoFollow)
-			} else if len(v.pendingBlocks) > 0 {
-				blocks := v.pendingBlocks
-				v.pendingBlocks = nil
-				v.formattedBlocks = append(v.formattedBlocks, blocks...)
+			prevLen := v.lastDisplayLen
+			v.syncDisplayEntries()
 
-				newText := buildDisplayTextFromBlocks(v.formattedBlocks)
-				if strings.HasPrefix(newText, "…\n") || newText != v.displayText+pendingChunk(blocks) {
-					v.displayText = newText
-					v.applyDisplayText(v.autoFollow)
-				} else {
-					v.appendDisplayChunk(pendingChunk(blocks))
-				}
+			start := 0
+			if !v.fullSyncPending && prevLen > 0 && len(v.displayEntries) >= prevLen {
+				start = prevLen - 1
+			}
+			v.refreshHeightsFrom(start)
+			v.lastDisplayLen = len(v.displayEntries)
+
+			v.list.Refresh()
+			if v.autoFollow {
+				v.scrollToEnd()
 			}
 			v.refreshPending = false
+			v.fullSyncPending = false
 		})
 	})
-}
-
-func pendingChunk(blocks []string) string {
-	var b strings.Builder
-	for i, block := range blocks {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
-		b.WriteString(block)
-	}
-	if len(blocks) > 0 {
-		b.WriteByte('\n')
-	}
-	return b.String()
 }

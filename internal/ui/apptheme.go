@@ -30,6 +30,9 @@ func newLogcatTheme(dark bool) fyne.Theme {
 }
 
 func (t *logcatTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	if c, ok := logThemeColors(name); ok {
+		return c
+	}
 	if !t.isDark {
 		return t.base.Color(name, variant)
 	}
