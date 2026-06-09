@@ -48,7 +48,7 @@ func (s *LogcatSession) Done() <-chan struct{} {
 	return s.done
 }
 
-func (s *LogcatSession) Start(parent context.Context) error {
+func (s *LogcatSession) Start(parent context.Context, clearBuffer bool) error {
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
 
@@ -56,9 +56,11 @@ func (s *LogcatSession) Start(parent context.Context) error {
 		// non-fatal: package filtering falls back to tag/message match
 	}
 
-	if err := ClearLogBuffer(ctx, s.device); err != nil {
-		cancel()
-		return fmt.Errorf("limpar buffer logcat: %w", err)
+	if clearBuffer {
+		if err := ClearLogBuffer(ctx, s.device); err != nil {
+			cancel()
+			return fmt.Errorf("limpar buffer logcat: %w", err)
+		}
 	}
 
 	go s.uidRefreshLoop(ctx)

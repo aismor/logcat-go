@@ -11,11 +11,13 @@ import (
 )
 
 const (
-	headerHeight = 62
-	headerIcon   = 44
-	pillRadius   = 10
-	pillPadX     = 10
-	pillPadY     = 4
+	headerHeight = 88
+	headerIcon   = 72
+	pillRadius   = 8
+	pillPadX     = 8
+	pillPadY     = 2
+	headerPadX   = 12
+	headerPadY   = 8
 )
 
 func appTopBar(liveBadge fyne.CanvasObject, themeControl fyne.CanvasObject) fyne.CanvasObject {
@@ -29,27 +31,37 @@ func appTopBar(liveBadge fyne.CanvasObject, themeControl fyne.CanvasObject) fyne
 	icon.FillMode = canvas.ImageFillContain
 	icon.SetMinSize(fyne.NewSize(headerIcon, headerIcon))
 
+	iconSlot := canvas.NewRectangle(color.Transparent)
+	iconSlot.SetMinSize(fyne.NewSize(headerIcon, headerIcon))
+
 	subtitle := canvas.NewText("Desenvolvido by @aismor", mutedTextColor(v))
 	subtitle.TextSize = th.Size(theme.SizeNameCaptionText)
 
-	left := container.NewHBox(
-		icon,
-		container.NewVBox(brandedTitle(), subtitle),
+	titleBlock := container.NewVBox(brandedTitle(), subtitle)
+	titleSlot := canvas.NewRectangle(color.Transparent)
+	titleSlot.SetMinSize(fyne.NewSize(0, headerIcon))
+
+	leftInner := container.NewHBox(
+		container.NewStack(iconSlot, icon),
+		spacer(10),
+		container.NewStack(titleSlot, container.NewCenter(titleBlock)),
 	)
+	left := container.NewCenter(leftInner)
 
 	themeLabel := canvas.NewText("Tema:", mutedTextColor(v))
 	themeLabel.TextSize = th.Size(theme.SizeNameCaptionText)
 
-	right := container.NewHBox(
+	rightInner := container.NewHBox(
 		liveBadge,
 		spacer(12),
 		themeLabel,
 		spacer(6),
 		themeControl,
 	)
+	right := container.NewCenter(rightInner)
 
 	row := container.NewBorder(nil, nil, left, right, nil)
-	padded := container.NewPadded(row)
+	padded := container.New(&insetLayout{padX: headerPadX, padY: headerPadY}, row)
 	return container.NewStack(bg, padded)
 }
 
@@ -90,7 +102,7 @@ func (t *liveToggleButton) CreateRenderer() fyne.WidgetRenderer {
 	v := fyne.CurrentApp().Settings().ThemeVariant()
 
 	t.dot = canvas.NewCircle(androidGreen)
-	t.dot.Resize(fyne.NewSize(8, 8))
+	t.dot.Resize(fyne.NewSize(7, 7))
 
 	t.label = canvas.NewText("Ao vivo", titleWhite)
 	t.label.TextSize = th.Size(theme.SizeNameCaptionText)
@@ -148,32 +160,43 @@ type liveToggleRenderer struct {
 }
 
 func (r *liveToggleRenderer) Layout(size fyne.Size) {
-	r.btn.bg.Resize(size)
-	r.btn.bg.Move(fyne.NewPos(0, 0))
-	r.btn.border.Resize(size)
-	r.btn.border.Move(fyne.NewPos(0, 0))
+	min := r.MinSize()
+	w := min.Width
+	if size.Width > w {
+		w = size.Width
+	}
+	h := min.Height
+	yOff := float32(0)
+	if size.Height > h {
+		yOff = (size.Height - h) / 2
+	}
 
-	dotSize := float32(8)
+	r.btn.bg.Resize(fyne.NewSize(w, h))
+	r.btn.bg.Move(fyne.NewPos(0, yOff))
+	r.btn.border.Resize(fyne.NewSize(w, h))
+	r.btn.border.Move(fyne.NewPos(0, yOff))
+
+	dotSize := float32(7)
 	labelSize := r.btn.label.MinSize()
 	contentH := dotSize
 	if labelSize.Height > contentH {
 		contentH = labelSize.Height
 	}
-	y := (size.Height - contentH) / 2
+	y := yOff + (h-contentH)/2
 
 	r.btn.dot.Resize(fyne.NewSize(dotSize, dotSize))
 	r.btn.dot.Move(fyne.NewPos(pillPadX, y+(contentH-dotSize)/2))
 
-	labelX := pillPadX + dotSize + 6
+	labelX := pillPadX + dotSize + 5
 	r.btn.label.Move(fyne.NewPos(labelX, y+(contentH-labelSize.Height)/2))
 }
 
 func (r *liveToggleRenderer) MinSize() fyne.Size {
 	labelSize := r.btn.label.MinSize()
-	w := pillPadX*2 + 8 + 6 + labelSize.Width
+	w := pillPadX*2 + 7 + 5 + labelSize.Width
 	h := pillPadY*2 + labelSize.Height
-	if h < pillPadY*2+8 {
-		h = pillPadY*2 + 8
+	if h < pillPadY*2+7 {
+		h = pillPadY*2 + 7
 	}
 	return fyne.NewSize(w, h)
 }
@@ -242,7 +265,8 @@ func pillWrap(content fyne.CanvasObject) fyne.CanvasObject {
 	border.StrokeColor = th.Color(theme.ColorNameSeparator, v)
 
 	padded := container.New(&insetLayout{padX: pillPadX, padY: pillPadY}, content)
-	return container.NewStack(fill, border, padded)
+	wrapped := container.NewStack(fill, border, padded)
+	return container.NewCenter(wrapped)
 }
 
 func mutedTextColor(v fyne.ThemeVariant) color.Color {

@@ -18,6 +18,14 @@ import (
 	"github.com/aismor/logcat-go/internal/model"
 )
 
+type captureState int
+
+const (
+	captureIdle captureState = iota
+	captureRunning
+	capturePaused
+)
+
 type App struct {
 	window fyne.Window
 	ctx    context.Context
@@ -32,6 +40,7 @@ type App struct {
 	store          *adb.LogStore
 
 	startBtn    *widget.Button
+	pauseBtn    *widget.Button
 	stopBtn     *widget.Button
 	liveToggle  *liveToggleButton
 	connDot       *canvas.Circle
@@ -45,6 +54,7 @@ type App struct {
 
 	sessionMu sync.Mutex
 	session   *adb.LogcatSession
+	capture   captureState
 
 	searchTimer *time.Timer
 }
@@ -145,6 +155,12 @@ func (a *App) buildLayout() fyne.CanvasObject {
 	})
 	a.startBtn.Importance = widget.HighImportance
 
+	a.pauseBtn = widget.NewButtonWithIcon("Pausar", theme.MediaPauseIcon(), func() {
+		a.pauseLogcat()
+	})
+	a.pauseBtn.Importance = widget.MediumImportance
+	a.pauseBtn.Disable()
+
 	a.stopBtn = widget.NewButtonWithIcon("Parar", theme.MediaStopIcon(), func() {
 		a.stopLogcat()
 	})
@@ -158,7 +174,7 @@ func (a *App) buildLayout() fyne.CanvasObject {
 		a.searchEntry,
 	)
 	toolsRow := container.NewHBox(refreshDevicesBtn, formatJSONBtn, copyBtn, clearToolsBtn)
-	transportRow := container.NewHBox(a.startBtn, a.stopBtn)
+	transportRow := container.NewHBox(a.startBtn, a.pauseBtn, a.stopBtn)
 	actionsRow := container.NewBorder(nil, nil, toolsRow, transportRow, nil)
 	controlsBody := container.NewVBox(filtersRow, actionsRow)
 
@@ -324,6 +340,7 @@ func (a *App) onDeviceChanged() {
 	a.updatePackageField()
 	a.refreshPackages()
 	a.stopLogcat()
+	a.logView.Clear()
 	a.updateConnectionBadge()
 }
 
@@ -376,6 +393,23 @@ func (a *App) selectedMode() model.LogMode {
 	}
 }
 
+func (a *App) updateTransportButtons() {
+	switch a.capture {
+	case captureRunning:
+		a.startBtn.Disable()
+		a.pauseBtn.Enable()
+		a.stopBtn.Enable()
+	case capturePaused:
+		a.startBtn.Enable()
+		a.pauseBtn.Disable()
+		a.stopBtn.Enable()
+	default:
+		a.startBtn.Enable()
+		a.pauseBtn.Disable()
+		a.stopBtn.Disable()
+	}
+}
+
 func (a *App) startLogcat() {
 	device := a.selectedDeviceSerial()
 	if device == "" {
@@ -388,8 +422,10 @@ func (a *App) startLogcat() {
 		return
 	}
 
-	a.stopLogcat()
-	a.logView.Clear()
+	freshStart := a.logView.StoreLen() == 0
+	if freshStart {
+		a.logView.Clear()
+	}
 	a.logView.SetSearch(a.searchEntry.Text)
 
 	filter := model.NewFilterConfig(a.selectedPackages, a.selectedMode(), "")
@@ -397,18 +433,27 @@ func (a *App) startLogcat() {
 
 	a.sessionMu.Lock()
 	a.session = session
+	a.capture = captureRunning
 	a.sessionMu.Unlock()
 
-	a.startBtn.Disable()
-	a.stopBtn.Enable()
-	a.setStatusLeft(fmt.Sprintf("Logcat iniciado para %d pacote(s)", len(a.selectedPackages)))
+	a.updateTransportButtons()
+
+	resuming := !freshStart
+	if resuming {
+		a.setStatusLeft(fmt.Sprintf("Retomando logcat · %d linha(s) na tela", a.logView.StoreLen()))
+	} else {
+		a.setStatusLeft(fmt.Sprintf("Logcat iniciado para %d pacote(s)", len(a.selectedPackages)))
+	}
 
 	go func() {
-		if err := session.Start(a.ctx); err != nil {
+		if err := session.Start(a.ctx, !resuming); err != nil {
 			fyne.Do(func() {
+				a.sessionMu.Lock()
+				a.session = nil
+				a.capture = captureIdle
+				a.sessionMu.Unlock()
 				a.setStatusLeft("Erro ao iniciar logcat: " + err.Error())
-				a.startBtn.Enable()
-				a.stopBtn.Disable()
+				a.updateTransportButtons()
 			})
 			return
 		}
@@ -419,9 +464,24 @@ func (a *App) startLogcat() {
 func (a *App) consumeLogcat(session *adb.LogcatSession) {
 	defer func() {
 		fyne.Do(func() {
-			a.setStatusLeft("Logcat encerrado.")
-			a.startBtn.Enable()
-			a.stopBtn.Disable()
+			a.sessionMu.Lock()
+			stillCurrent := a.session == session
+			state := a.capture
+			if stillCurrent {
+				a.session = nil
+			}
+			a.sessionMu.Unlock()
+
+			if !stillCurrent {
+				a.updateTransportButtons()
+				return
+			}
+
+			if state == captureRunning {
+				a.capture = captureIdle
+				a.setStatusLeft("Logcat encerrado.")
+			}
+			a.updateTransportButtons()
 		})
 	}()
 
@@ -499,16 +559,42 @@ func (a *App) updateSearchStatus() {
 	a.setStatusLeft(fmt.Sprintf("Busca %q · %d de %d linha(s)", query, visible, total))
 }
 
-func (a *App) stopLogcat() {
+func (a *App) pauseLogcat() {
 	a.sessionMu.Lock()
+	if a.capture != captureRunning {
+		a.sessionMu.Unlock()
+		return
+	}
 	session := a.session
 	a.session = nil
+	a.capture = capturePaused
 	a.sessionMu.Unlock()
 
 	if session != nil {
 		session.Stop()
 	}
 
-	a.startBtn.Enable()
-	a.stopBtn.Disable()
+	a.updateTransportButtons()
+	a.setStatusLeft(fmt.Sprintf("Logcat pausado · %d linha(s) na tela", a.logView.StoreLen()))
+}
+
+func (a *App) stopLogcat() {
+	a.sessionMu.Lock()
+	session := a.session
+	a.session = nil
+	if a.capture == captureRunning || a.capture == capturePaused {
+		a.capture = captureIdle
+	}
+	a.sessionMu.Unlock()
+
+	if session != nil {
+		session.Stop()
+	}
+
+	a.updateTransportButtons()
+	if a.logView.StoreLen() > 0 {
+		a.setStatusLeft(fmt.Sprintf("Logcat parado · %d linha(s) na tela", a.logView.StoreLen()))
+		return
+	}
+	a.setStatusLeft("Logcat parado.")
 }
