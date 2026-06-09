@@ -8,11 +8,13 @@
 *.dylib
 /bin/
 /dist/
+/dist/deb-stage/
 /build/
 debug
 __debug_bin
 
-# Fyne / empacotamento desktop
+# Fyne / empacotamento desktop (artefatos gerados — não versionar)
+# Fontes do .deb: Makefile, packaging/, scripts/build-deb.sh
 fyne-cross/
 *.app
 *.dmg

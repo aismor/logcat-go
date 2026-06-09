@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Logcat Go
+GenericName=Android Logcat Viewer
+Comment=Visualizador de logs Android via ADB
+Exec=logcat-go
+Icon=logcat-go
+Terminal=false
+Categories=Development;Utility;
+Keywords=android;logcat;adb;debug;
+StartupWMClass=logcat-go

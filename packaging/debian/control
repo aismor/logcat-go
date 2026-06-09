@@ -1,0 +1,12 @@
+Package: logcat-go
+Version: @VERSION@
+Section: devel
+Priority: optional
+Architecture: @ARCH@
+Depends: android-tools-adb, libgl1, libglib2.0-0, libgles2, libx11-6, libxcursor1, libxext6, libxfixes3, libxi6, libxinerama1, libxrandr2, libxxf86vm1, ca-certificates
+Maintainer: Aismor <dev.aismor@gmail.com>
+Homepage: https://github.com/aismor/logcat-go
+Description: Visualizador logcat Android (ADB)
+ Logcat Go é um visualizador de logs Android com interface gráfica.
+ .
+ Requer um device/emulador conectado via ADB (android-tools-adb).
