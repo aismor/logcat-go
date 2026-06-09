@@ -316,14 +316,14 @@ func cardHeading(title, subtitle string, actions fyne.CanvasObject) fyne.CanvasO
 	return container.NewBorder(nil, nil, nil, actions, titleCol)
 }
 
-func statusFooter(left, right fyne.CanvasObject) fyne.CanvasObject {
+func statusFooter(left, center, right fyne.CanvasObject) fyne.CanvasObject {
 	th := fyne.CurrentApp().Settings().Theme()
 	v := fyne.CurrentApp().Settings().ThemeVariant()
 
 	bg := canvas.NewRectangle(th.Color(theme.ColorNameHeaderBackground, v))
 	bg.SetMinSize(fyne.NewSize(0, 36))
 
-	row := container.NewBorder(nil, nil, left, right, nil)
+	row := container.NewBorder(nil, nil, left, right, center)
 	padded := container.NewPadded(row)
 	return container.NewStack(bg, padded)
 }

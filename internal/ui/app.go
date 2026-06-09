@@ -16,6 +16,7 @@ import (
 
 	"github.com/aismor/logcat-go/internal/adb"
 	"github.com/aismor/logcat-go/internal/model"
+	"github.com/aismor/logcat-go/internal/sysmon"
 )
 
 type captureState int
@@ -36,6 +37,7 @@ type App struct {
 	packageEntry *packageSearchField
 	searchEntry    *widget.Entry
 	statusLeft     *widget.Label
+	resourceLabel  *widget.Label
 	logView        *LogView
 	store          *adb.LogStore
 
@@ -57,6 +59,8 @@ type App struct {
 	capture   captureState
 
 	searchTimer *time.Timer
+
+	resourceMon *sysmon.Monitor
 }
 
 func NewApp() *App {
@@ -81,6 +85,7 @@ func (a *App) Run() {
 		a.window.Close()
 	})
 	a.refreshDevices()
+	a.startResourceMonitor()
 	a.window.ShowAndRun()
 }
 
@@ -111,6 +116,10 @@ func (a *App) buildLayout() fyne.CanvasObject {
 
 	a.statusLeft = widget.NewLabel("Pronto")
 	a.statusLeft.Importance = widget.LowImportance
+
+	a.resourceLabel = widget.NewLabel("RAM — · CPU —")
+	a.resourceLabel.Importance = widget.LowImportance
+	a.resourceMon = sysmon.New()
 
 	themeBtn := newThemeMenuButton(a.window, func(mode string) {
 		_ = mode
@@ -202,6 +211,7 @@ func (a *App) buildLayout() fyne.CanvasObject {
 	a.connDot, a.connLabel = newConnectionStatus(false, "")
 	footer := statusFooter(
 		statusSegment(theme.InfoIcon(), a.statusLeft),
+		container.NewCenter(statusSegment(theme.ComputerIcon(), a.resourceLabel)),
 		container.NewHBox(a.connDot, a.connLabel, widget.NewIcon(theme.ContentRedoIcon())),
 	)
 
@@ -254,6 +264,28 @@ func (a *App) updateConnectionBadge() {
 
 func (a *App) setStatusLeft(msg string) {
 	a.statusLeft.SetText(msg)
+}
+
+func (a *App) startResourceMonitor() {
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-a.ctx.Done():
+				return
+			case <-ticker.C:
+				snap := a.resourceMon.Sample()
+				text := fmt.Sprintf("RAM %.0f MB · CPU %.1f%%", snap.RAMMB, snap.CPUPct)
+				fyne.Do(func() {
+					if a.resourceLabel != nil {
+						a.resourceLabel.SetText(text)
+					}
+				})
+			}
+		}
+	}()
 }
 
 func (a *App) setStatus(msg string) {
