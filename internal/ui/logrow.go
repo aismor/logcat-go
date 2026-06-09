@@ -53,6 +53,10 @@ func logRowFromItem(obj fyne.CanvasObject) *logRowParts {
 
 func logSegments(entry model.LogEntry) []widget.RichTextSegment {
 	mono := fyne.TextStyle{Monospace: true}
+	level := normalizeLevel(entry.Level)
+	levelColor := levelThemeColor(entry.Level)
+	msgColor := messageThemeColor(entry.Level)
+
 	metaStyle := widget.RichTextStyle{
 		Inline:    true,
 		ColorName: themeColorLogMeta,
@@ -60,24 +64,27 @@ func logSegments(entry model.LogEntry) []widget.RichTextSegment {
 	}
 	levelStyle := widget.RichTextStyle{
 		Inline:    true,
-		ColorName: levelThemeColor(entry.Level),
-		TextStyle: mono,
+		ColorName: levelColor,
+		TextStyle: fyne.TextStyle{Monospace: true, Bold: true},
 	}
 	msgStyle := widget.RichTextStyle{
 		Inline:    true,
-		ColorName: messageThemeColor(entry.Level),
+		ColorName: msgColor,
 		TextStyle: mono,
 	}
 
-	prefix := linePrefix(entry) + " "
-	lvl := normalizeLevel(entry.Level) + " "
+	meta := lineMetaPrefix(entry)
 	msg := messageText(entry)
 
-	return []widget.RichTextSegment{
-		&widget.TextSegment{Text: prefix, Style: metaStyle},
-		&widget.TextSegment{Text: lvl, Style: levelStyle},
-		&widget.TextSegment{Text: msg, Style: msgStyle},
+	segments := make([]widget.RichTextSegment, 0, 3)
+	if meta != "" {
+		segments = append(segments, &widget.TextSegment{Text: meta + " ", Style: metaStyle})
 	}
+	segments = append(segments,
+		&widget.TextSegment{Text: level + " ", Style: levelStyle},
+		&widget.TextSegment{Text: msg, Style: msgStyle},
+	)
+	return segments
 }
 
 func measureRowHeight(entry model.LogEntry, contentWidth float32) float32 {

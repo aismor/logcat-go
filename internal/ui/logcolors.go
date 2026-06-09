@@ -44,6 +44,8 @@ func messageThemeColor(level string) fyne.ThemeColorName {
 		return themeColorLogWarnMsg
 	case "E", "F", "A":
 		return themeColorLogErrorMsg
+	case "V", "D", "I":
+		return levelThemeColor(level)
 	default:
 		return themeColorLogMessage
 	}

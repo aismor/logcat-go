@@ -62,6 +62,35 @@ func linePrefix(entry model.LogEntry) string {
 	return b.String()
 }
 
+func lineMetaPrefix(entry model.LogEntry) string {
+	var b strings.Builder
+
+	if entry.Date != "" && entry.Time != "" {
+		b.WriteString(entry.Date)
+		b.WriteByte(' ')
+		b.WriteString(entry.Time)
+	}
+
+	if entry.PID > 0 {
+		if b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(strconv.Itoa(entry.PID))
+		b.WriteByte('-')
+		b.WriteString(strconv.Itoa(entry.TID))
+	}
+
+	tag := strings.TrimSpace(entry.Tag)
+	if tag != "" {
+		if b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(tag)
+	}
+
+	return b.String()
+}
+
 func formatDisplayBlock(entry model.LogEntry) string {
 	return formatPlainLine(entry)
 }
