@@ -53,6 +53,7 @@ func NewLogView(store *adb.LogStore, parent fyne.Window) *LogView {
 	}
 
 	view.scroll = container.NewVScroll(view.entry)
+	view.scroll.SetMinSize(fyne.NewSize(0, 200))
 	return view
 }
 

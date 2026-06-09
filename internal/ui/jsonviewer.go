@@ -27,6 +27,7 @@ func ShowJSONViewer(parent fyne.Window, raw string) {
 	}
 
 	win := fyne.CurrentApp().NewWindow("JSON formatado")
+	win.SetIcon(AppIcon())
 	win.Resize(fyne.NewSize(920, 720))
 	win.CenterOnScreen()
 
@@ -118,13 +119,16 @@ func ShowJSONViewer(parent fyne.Window, raw string) {
 		searchEntry,
 	)
 
-	body := container.NewBorder(
-		container.NewVBox(searchRow, statusLabel, widget.NewSeparator()),
-		nil, nil, nil,
-		scroll,
-	)
+	searchCard := widget.NewCard("Busca", "Enter/F3 próximo · Shift+Enter anterior", container.NewVBox(
+		searchRow,
+		statusLabel,
+	))
 
-	win.SetContent(body)
+	contentCard := widget.NewCard("JSON", "Trecho destacado conforme a busca", scroll)
+
+	body := container.NewBorder(searchCard, nil, nil, nil, contentCard)
+
+	win.SetContent(container.NewPadded(body))
 	win.Canvas().AddShortcut(&desktop.CustomShortcut{
 		KeyName:  fyne.KeyF3,
 		Modifier: fyne.KeyModifierShift,

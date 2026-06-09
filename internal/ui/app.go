@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
@@ -23,22 +24,24 @@ type App struct {
 	cancel context.CancelFunc
 
 	deviceSelect   *widget.Select
-	packageSummary *widget.Label
 	modeSelect     *widget.Select
+	packageEntry *packageSearchField
 	searchEntry    *widget.Entry
-	statusLabel    *widget.Label
+	statusLeft     *widget.Label
 	logView        *LogView
 	store          *adb.LogStore
 
 	startBtn    *widget.Button
 	stopBtn     *widget.Button
-	packagesBtn *widget.Button
-	followCheck *widget.Check
+	liveToggle  *liveToggleButton
+	connDot       *canvas.Circle
+	connLabel     *widget.Label
+	fullScreen    bool
 
-	devices           []model.Device
-	packages          []model.PackageInfo
-	selectedPackages  []model.PackageInfo
-	packagesLoaded    bool
+	devices          []model.Device
+	packages         []model.PackageInfo
+	selectedPackages []model.PackageInfo
+	packagesLoaded   bool
 
 	sessionMu sync.Mutex
 	session   *adb.LogcatSession
@@ -56,8 +59,11 @@ func NewApp() *App {
 }
 
 func (a *App) Run() {
+	InitThemeFromPreferences()
+
 	a.window = fyne.CurrentApp().NewWindow("Logcat Go")
-	a.window.Resize(fyne.NewSize(1200, 760))
+	a.window.SetIcon(AppIcon())
+	a.window.Resize(fyne.NewSize(1360, 860))
 	a.window.SetContent(a.buildLayout())
 	a.window.SetCloseIntercept(func() {
 		a.stopLogcat()
@@ -74,15 +80,6 @@ func (a *App) buildLayout() fyne.CanvasObject {
 	})
 	a.deviceSelect.PlaceHolder = "Device ADB"
 
-	a.packageSummary = widget.NewLabel("Nenhum pacote")
-	a.packageSummary.Wrapping = fyne.TextTruncate
-	a.packageSummary.TextStyle = fyne.TextStyle{Monospace: true}
-
-	a.packagesBtn = widget.NewButtonWithIcon("Pacotes", theme.SearchIcon(), func() {
-		a.openPackagePicker()
-	})
-	a.packagesBtn.Importance = widget.MediumImportance
-
 	a.modeSelect = widget.NewSelect([]string{
 		model.ModeClean.String(),
 		model.ModeFull.String(),
@@ -90,7 +87,6 @@ func (a *App) buildLayout() fyne.CanvasObject {
 		model.ModeWarnErrorFatal.String(),
 	}, nil)
 	a.modeSelect.SetSelected(model.ModeClean.String())
-	a.modeSelect.PlaceHolder = "Modo"
 
 	a.searchEntry = widget.NewEntry()
 	a.searchEntry.SetPlaceHolder("Filtrar logs...")
@@ -103,53 +99,46 @@ func (a *App) buildLayout() fyne.CanvasObject {
 
 	a.logView = NewLogView(a.store, a.window)
 
-	refreshDevicesBtn := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), func() {
-		a.refreshDevices()
-	})
-	refreshDevicesBtn.Importance = widget.LowImportance
+	a.statusLeft = widget.NewLabel("Pronto")
+	a.statusLeft.Importance = widget.LowImportance
 
-	refreshPackagesBtn := widget.NewButtonWithIcon("", theme.ContentAddIcon(), func() {
-		a.refreshPackages()
+	themeBtn := newThemeMenuButton(a.window, func(mode string) {
+		_ = mode
 	})
-	refreshPackagesBtn.Importance = widget.LowImportance
 
-	clearBtn := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
-		a.logView.Clear()
+	a.liveToggle = newLiveToggleButton(true, func(active bool) {
+		a.logView.SetAutoFollow(active)
 	})
-	clearBtn.Importance = widget.LowImportance
 
-	copyBtn := widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
-		copied, async := a.logView.CopySelection(a.window.Clipboard(), func() {
-			a.setStatus("Log completo copiado.")
-		})
-		if async {
-			a.setStatus("Copiando log completo...")
-			return
-		}
-		if copied == "" {
-			a.setStatus("Nenhum log para copiar.")
-			return
-		}
-		if strings.TrimSpace(a.logView.SelectedText()) != "" {
-			a.setStatus("Seleção copiada.")
-			return
-		}
-		a.setStatus("Log completo copiado.")
-	})
-	copyBtn.Importance = widget.LowImportance
-
-	formatJSONBtn := widget.NewButtonWithIcon("JSON", theme.DocumentCreateIcon(), func() {
+	refreshDevicesBtn := a.iconToolButton(theme.ViewRefreshIcon(), "Atualizar devices", a.refreshDevices)
+	formatJSONBtn := widget.NewButtonWithIcon("{ } JSON", theme.DocumentCreateIcon(), func() {
 		if err := a.logView.FormatSelectedJSON(); err != nil {
-			a.setStatus(err.Error())
+			a.setStatusLeft(err.Error())
 			return
 		}
 	})
 	formatJSONBtn.Importance = widget.MediumImportance
-
-	a.followCheck = widget.NewCheck("Ao vivo", func(checked bool) {
-		a.logView.SetAutoFollow(checked)
+	copyBtn := a.iconToolButton(theme.ContentCopyIcon(), "Copiar", func() {
+		copied, async := a.logView.CopySelection(a.window.Clipboard(), func() {
+			a.setStatusLeft("Log completo copiado.")
+		})
+		if async {
+			a.setStatusLeft("Copiando log completo...")
+			return
+		}
+		if copied == "" {
+			a.setStatusLeft("Nenhum log para copiar.")
+			return
+		}
+		if strings.TrimSpace(a.logView.SelectedText()) != "" {
+			a.setStatusLeft("Seleção copiada.")
+			return
+		}
+		a.setStatusLeft("Log completo copiado.")
 	})
-	a.followCheck.SetChecked(true)
+	clearToolsBtn := a.iconToolButton(theme.DeleteIcon(), "Limpar", func() {
+		a.logView.Clear()
+	})
 
 	a.startBtn = widget.NewButtonWithIcon("Iniciar", theme.MediaPlayIcon(), func() {
 		a.startLogcat()
@@ -159,76 +148,134 @@ func (a *App) buildLayout() fyne.CanvasObject {
 	a.stopBtn = widget.NewButtonWithIcon("Parar", theme.MediaStopIcon(), func() {
 		a.stopLogcat()
 	})
-	a.stopBtn.Importance = widget.DangerImportance
+	a.stopBtn.Importance = widget.MediumImportance
 	a.stopBtn.Disable()
 
-	a.statusLabel = widget.NewLabel("Pronto")
-	a.statusLabel.Wrapping = fyne.TextWrapWord
-	a.statusLabel.Importance = widget.LowImportance
-
-	filtersRow := container.NewGridWithColumns(3, a.deviceSelect, a.modeSelect, a.searchEntry)
-	actionsRow := container.NewHBox(
-		refreshDevicesBtn,
-		refreshPackagesBtn,
-		formatJSONBtn,
-		copyBtn,
-		clearBtn,
-		a.followCheck,
-		a.startBtn,
-		a.stopBtn,
+	filtersRow := container.NewGridWithColumns(4,
+		a.deviceSelect,
+		a.buildPackageSelector(),
+		a.modeSelect,
+		a.searchEntry,
 	)
-	toolbarRow := container.NewBorder(nil, nil, nil, actionsRow, filtersRow)
+	toolsRow := container.NewHBox(refreshDevicesBtn, formatJSONBtn, copyBtn, clearToolsBtn)
+	transportRow := container.NewHBox(a.startBtn, a.stopBtn)
+	actionsRow := container.NewBorder(nil, nil, toolsRow, transportRow, nil)
+	controlsBody := container.NewVBox(filtersRow, actionsRow)
 
-	packageRow := container.NewBorder(nil, nil, a.packagesBtn, nil, a.packageSummary)
+	controlsHeading := cardHeading("Controles", "Device, filtros e captura", widget.NewIcon(theme.SettingsIcon()))
+	controlsCard := widget.NewCard("", "", container.NewVBox(controlsHeading, controlsBody))
 
-	header := container.NewVBox(
-		toolbarRow,
-		packageRow,
-		widget.NewSeparator(),
+	clearLogsBtn := widget.NewButtonWithIcon("Limpar logs", theme.DeleteIcon(), func() {
+		a.logView.Clear()
+	})
+	clearLogsBtn.Importance = widget.LowImportance
+
+	fullscreenBtn := widget.NewButtonWithIcon("", theme.ViewFullScreenIcon(), func() {
+		a.fullScreen = !a.fullScreen
+		a.window.SetFullScreen(a.fullScreen)
+	})
+	fullscreenBtn.Importance = widget.LowImportance
+
+	logHeading := cardHeading("Logs", "Selecione texto para copiar ou formatar JSON",
+		container.NewHBox(clearLogsBtn, fullscreenBtn))
+	logPanel := container.NewBorder(logHeading, nil, nil, nil, a.logView.Container())
+	logCard := widget.NewCard("", "", logPanel)
+
+	mainContent := container.NewBorder(controlsCard, nil, nil, nil, logCard)
+
+	a.connDot, a.connLabel = newConnectionStatus(false, "")
+	footer := statusFooter(
+		statusSegment(theme.InfoIcon(), a.statusLeft),
+		container.NewHBox(a.connDot, a.connLabel, widget.NewIcon(theme.ContentRedoIcon())),
 	)
 
-	statusBar := container.NewBorder(
-		nil, nil,
-		widget.NewIcon(theme.InfoIcon()),
-		nil,
-		a.statusLabel,
-	)
-
-	return container.NewBorder(header, statusBar, nil, nil, a.logView.Container())
+	topBar := appTopBar(a.liveToggle, themeBtn)
+	mainArea := container.NewPadded(mainContent)
+	body := container.NewBorder(topBar, footer, nil, nil, mainArea)
+	return body
 }
 
-func (a *App) openPackagePicker() {
+func (a *App) buildPackageSelector() fyne.CanvasObject {
+	a.packageEntry = newPackageSearchField(a.openPackagePickerWithQuery)
+	a.updatePackageField()
+	return a.packageEntry
+}
+
+func (a *App) updatePackageField() {
+	if a.packageEntry == nil {
+		return
+	}
+	if len(a.selectedPackages) == 0 {
+		a.packageEntry.SetDisplay("")
+		return
+	}
+	a.packageEntry.SetDisplay(formatPackageSelection(a.selectedPackages))
+}
+
+func (a *App) iconToolButton(icon fyne.Resource, _ string, action func()) *widget.Button {
+	btn := widget.NewButtonWithIcon("", icon, action)
+	btn.Importance = widget.LowImportance
+	return btn
+}
+
+func (a *App) updateConnectionBadge() {
+	device := a.selectedDeviceSerial()
+	if a.connDot == nil || a.connLabel == nil {
+		return
+	}
+	th := fyne.CurrentApp().Settings().Theme()
+	v := fyne.CurrentApp().Settings().ThemeVariant()
+	if device != "" {
+		a.connLabel.SetText("Conectado a " + device)
+		a.connDot.FillColor = androidGreen
+	} else {
+		a.connLabel.SetText("Desconectado")
+		a.connDot.FillColor = th.Color(theme.ColorNameDisabled, v)
+	}
+	a.connDot.Refresh()
+	a.connLabel.Refresh()
+}
+
+func (a *App) setStatusLeft(msg string) {
+	a.statusLeft.SetText(msg)
+}
+
+func (a *App) setStatus(msg string) {
+	a.setStatusLeft(msg)
+}
+
+func (a *App) openPackagePickerWithQuery(query string) {
 	if !a.packagesLoaded || len(a.packages) == 0 {
 		device := a.selectedDeviceSerial()
 		if device == "" {
 			dialog.ShowInformation("Pacotes", "Selecione um device e aguarde o carregamento dos pacotes.", a.window)
 			return
 		}
-		a.setStatus("Carregando pacotes...")
+		a.setStatusLeft("Carregando pacotes...")
 		go func() {
 			packages, err := adb.ListPackages(a.ctx, device)
 			fyne.Do(func() {
 				if err != nil {
-					a.setStatus("Erro ao listar pacotes: " + err.Error())
+					a.setStatusLeft("Erro ao listar pacotes: " + err.Error())
 					return
 				}
 				a.packages = packages
 				a.packagesLoaded = true
-				a.setStatus(fmt.Sprintf("%d pacotes carregados.", len(packages)))
-				showPackagePicker(a.window, a.packages, a.selectedPackages, a.applyPackageSelection)
+				a.setStatusLeft(fmt.Sprintf("%d pacotes carregados.", len(packages)))
+				showPackagePicker(a.window, a.packages, a.selectedPackages, query, a.applyPackageSelection)
 			})
 		}()
 		return
 	}
 
-	showPackagePicker(a.window, a.packages, a.selectedPackages, a.applyPackageSelection)
+	showPackagePicker(a.window, a.packages, a.selectedPackages, query, a.applyPackageSelection)
 }
 
 func (a *App) applyPackageSelection(packages []model.PackageInfo) {
 	a.selectedPackages = packages
-	a.packageSummary.SetText(formatPackageSelection(packages))
+	a.updatePackageField()
 	if len(packages) > 0 {
-		a.setStatus(fmt.Sprintf("%d pacote(s) selecionado(s).", len(packages)))
+		a.setStatusLeft(fmt.Sprintf("%d pacote(s) selecionado(s).", len(packages)))
 	}
 }
 
@@ -237,7 +284,7 @@ func (a *App) refreshDevices() {
 		devices, err := adb.ListDevices(a.ctx)
 		fyne.Do(func() {
 			if err != nil {
-				a.setStatus("Erro ao listar devices: " + err.Error())
+				a.setStatusLeft("Erro ao listar devices: " + err.Error())
 				return
 			}
 
@@ -259,22 +306,25 @@ func (a *App) refreshDevices() {
 			}
 
 			if len(options) == 0 {
-				a.setStatus("Nenhum device conectado.")
+				a.setStatusLeft("Nenhum device conectado.")
+				a.updateConnectionBadge()
 				return
 			}
 
-			a.setStatus(fmt.Sprintf("%d device(s) encontrado(s).", len(options)))
+			a.setStatusLeft(fmt.Sprintf("%d device(s) encontrado(s).", len(options)))
+			a.updateConnectionBadge()
 		})
 	}()
 }
 
 func (a *App) onDeviceChanged() {
 	a.selectedPackages = nil
-	a.packageSummary.SetText("Nenhum pacote selecionado")
 	a.packagesLoaded = false
 	a.packages = nil
+	a.updatePackageField()
 	a.refreshPackages()
 	a.stopLogcat()
+	a.updateConnectionBadge()
 }
 
 func (a *App) refreshPackages() {
@@ -288,13 +338,14 @@ func (a *App) refreshPackages() {
 		packages, err := adb.ListPackages(a.ctx, device)
 		fyne.Do(func() {
 			if err != nil {
-				a.setStatus("Erro ao listar pacotes: " + err.Error())
+				a.setStatusLeft("Erro ao listar pacotes: " + err.Error())
 				return
 			}
 
 			a.packages = packages
 			a.packagesLoaded = true
-			a.setStatus(fmt.Sprintf("%d pacotes carregados. Clique em \"Escolher pacotes\" para filtrar.", len(packages)))
+			a.setStatusLeft(fmt.Sprintf("%d pacotes carregados.", len(packages)))
+			a.updateConnectionBadge()
 		})
 	}()
 }
@@ -333,7 +384,7 @@ func (a *App) startLogcat() {
 	}
 
 	if len(a.selectedPackages) == 0 {
-		dialog.ShowInformation("Pacote", "Selecione ao menos um pacote em \"Escolher pacotes\".", a.window)
+		dialog.ShowInformation("Pacote", "Selecione ao menos um pacote em \"Buscar e selecionar pacotes\".", a.window)
 		return
 	}
 
@@ -350,12 +401,12 @@ func (a *App) startLogcat() {
 
 	a.startBtn.Disable()
 	a.stopBtn.Enable()
-	a.setStatus(fmt.Sprintf("Logcat iniciado para %d pacote(s)", len(a.selectedPackages)))
+	a.setStatusLeft(fmt.Sprintf("Logcat iniciado para %d pacote(s)", len(a.selectedPackages)))
 
 	go func() {
 		if err := session.Start(a.ctx); err != nil {
 			fyne.Do(func() {
-				a.setStatus("Erro ao iniciar logcat: " + err.Error())
+				a.setStatusLeft("Erro ao iniciar logcat: " + err.Error())
 				a.startBtn.Enable()
 				a.stopBtn.Disable()
 			})
@@ -368,7 +419,7 @@ func (a *App) startLogcat() {
 func (a *App) consumeLogcat(session *adb.LogcatSession) {
 	defer func() {
 		fyne.Do(func() {
-			a.setStatus("Logcat encerrado.")
+			a.setStatusLeft("Logcat encerrado.")
 			a.startBtn.Enable()
 			a.stopBtn.Disable()
 		})
@@ -442,10 +493,10 @@ func (a *App) updateSearchStatus() {
 	visible := a.logView.FilteredLen()
 
 	if query == "" {
-		a.setStatus(fmt.Sprintf("Capturando logs · %d linha(s)", total))
+		a.setStatusLeft(fmt.Sprintf("Capturando logs · %d linha(s)", total))
 		return
 	}
-	a.setStatus(fmt.Sprintf("Busca %q · %d de %d linha(s)", query, visible, total))
+	a.setStatusLeft(fmt.Sprintf("Busca %q · %d de %d linha(s)", query, visible, total))
 }
 
 func (a *App) stopLogcat() {
@@ -460,8 +511,4 @@ func (a *App) stopLogcat() {
 
 	a.startBtn.Enable()
 	a.stopBtn.Disable()
-}
-
-func (a *App) setStatus(msg string) {
-	a.statusLabel.SetText(msg)
 }

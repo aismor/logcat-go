@@ -8,7 +8,7 @@ import (
 
 func main() {
 	application := app.NewWithID("com.aismor.logcat-go")
-	application.SetIcon(nil)
+	application.SetIcon(ui.AppIcon())
 
 	logcatApp := ui.NewApp()
 	logcatApp.Run()
